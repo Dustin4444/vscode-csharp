@@ -8,37 +8,96 @@ trigger:
     - main
 
 pr:
-- feature/*
-- release
-- prerelease
-- main
+  branches:
+    include:
+    - feature/*
+    - release
+    - prerelease
+    - main
+  paths:
+    exclude:
+    - '*.md'
+    - .github/*
+    - azure-pipelines/release.yml
+    - CHANGELOG.
+
+# Run a scheduled build every night on main to run tests against insiders VSCode.
+# The variable testVSCodeVersion is set to insiders based on the build reason.
+schedules:
+  - cron: "0 0 * * *"
+    displayName: Daily Insiders Build
+    branches:
+      include:
+        - main
+
+variables:
+- template: /azure-pipelines/dotnet-variables.yml@self
+- name: testVSCodeVersion
+  ${{ if eq( variables['Build.Reason'], 'Schedule' ) }}: 
+    value: insiders
+  ${{ else }}: 
+    value: stable
 
 stages:
 - template: azure-pipelines/build-all.yml
   parameters:
     isOfficial: false
+    signType: test
+    dotnetVersion: $(defaultDotnetVersion)
 
-- stage: Test
-  displayName: Test
+- stage:
+  displayName: Test Linux (.NET 8)
   dependsOn: []
   jobs:
-  - template: azure-pipelines/test.yml
+  - template: azure-pipelines/test-matrix.yml
     parameters:
-      jobName: Linux
-      poolName: NetCore-Public
-      demandsName: 1es-ubuntu-2004-open
+      # Prefer the dotnet from the container.
+      dotnetVersion: ''
+      testVSCodeVersion: $(testVSCodeVersion)
+      installAdditionalLinuxDependencies: true
+      pool:
+        name: NetCore-Public
+        demands: ImageOverride -equals 1es-ubuntu-2004-open
+      containerName: mcr.microsoft.com/dotnet/sdk:8.0
 
-  - template: azure-pipelines/test.yml
+- stage:
+  displayName: Test Linux (.NET 9)
+  dependsOn: []
+  jobs:
+  - template: azure-pipelines/test-matrix.yml
     parameters:
-      jobName: Windows
-      poolName: NetCore-Public
-      demandsName: 1es-windows-2022-open
+      # Prefer the dotnet from the container.
+      dotnetVersion: ''
+      testVSCodeVersion: $(testVSCodeVersion)
+      installAdditionalLinuxDependencies: true
+      pool:
+        name: NetCore-Public
+        demands: ImageOverride -equals 1es-ubuntu-2004-open
+      containerName: mcr.microsoft.com/dotnet/sdk:9.0
 
-  - template: azure-pipelines/test.yml
+- stage: Test_Windows_Stage
+  displayName: Test Windows
+  dependsOn: []
+  jobs:
+  - template: azure-pipelines/test-matrix.yml
     parameters:
-      jobName: MacOS
-      poolName: Azure Pipelines
-      vmImageName: macOS-13
+      dotnetVersion: $(defaultDotnetVersion)
+      testVSCodeVersion: $(testVSCodeVersion)
+      pool:
+        name: NetCore-Public
+        demands: ImageOverride -equals 1es-windows-2022-open
+
+- stage: Test_MacOS_Stage
+  displayName: Test MacOS
+  dependsOn: []
+  jobs:
+  - template: azure-pipelines/test-matrix.yml
+    parameters:
+      dotnetVersion: $(defaultDotnetVersion)
+      testVSCodeVersion: $(testVSCodeVersion)
+      pool:
+        name: Azure Pipelines
+        vmImage: macOS-13
 
 - stage: Test_OmniSharp
   displayName: Test OmniSharp
@@ -56,3 +115,6 @@ stages:
       demands: ImageOverride -equals $(demandsName)
     steps:
     - template: azure-pipelines/test-omnisharp.yml
+      parameters:
+        dotnetVersion: $(defaultDotnetVersion)
+        testVSCodeVersion: $(testVSCodeVersion)

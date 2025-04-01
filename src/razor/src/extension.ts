@@ -3,19 +3,14 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as path from 'path';
 import * as vscode from 'vscode';
 import * as vscodeapi from 'vscode';
-import * as util from '../../common';
 import { ExtensionContext } from 'vscode';
-import { BlazorDebugConfigurationProvider } from './blazorDebug/blazorDebugConfigurationProvider';
 import { CodeActionsHandler } from './codeActions/codeActionsHandler';
+import { CompletionHandler } from './completion/completionHandler';
 import { RazorCodeActionRunner } from './codeActions/razorCodeActionRunner';
 import { RazorCodeLensProvider } from './codeLens/razorCodeLensProvider';
 import { ColorPresentationHandler } from './colorPresentation/colorPresentationHandler';
-import { ProvisionalCompletionOrchestrator } from './completion/provisionalCompletionOrchestrator';
-import { RazorCompletionItemProvider } from './completion/razorCompletionItemProvider';
-import { listenToConfigurationChanges } from './configurationChangeListener';
 import { RazorCSharpFeature } from './csharp/razorCSharpFeature';
 import { RazorDefinitionProvider } from './definition/razorDefinitionProvider';
 import { ReportIssueCommand } from './diagnostics/reportIssueCommand';
@@ -36,7 +31,6 @@ import { ProposedApisFeature } from './proposedApisFeature';
 import { RazorLanguage } from './razorLanguage';
 import { RazorLanguageConfiguration } from './razorLanguageConfiguration';
 import { RazorLanguageServerClient } from './razorLanguageServerClient';
-import { resolveRazorLanguageServerLogLevel } from './razorLanguageServerTraceResolver';
 import { RazorLanguageServiceClient } from './razorLanguageServiceClient';
 import { RazorLogger } from './razorLogger';
 import { RazorReferenceProvider } from './reference/razorReferenceProvider';
@@ -48,13 +42,15 @@ import { RazorDiagnosticHandler } from './diagnostics/razorDiagnosticHandler';
 import { RazorSimplifyMethodHandler } from './simplify/razorSimplifyMethodHandler';
 import TelemetryReporter from '@vscode/extension-telemetry';
 import { CSharpDevKitExports } from '../../csharpDevKitExports';
-import { DotnetRuntimeExtensionResolver } from '../../lsptoolshost/dotnetRuntimeExtensionResolver';
+import { DotnetRuntimeExtensionResolver } from '../../lsptoolshost/dotnetRuntime/dotnetRuntimeExtensionResolver';
 import { PlatformInformation } from '../../shared/platform';
 import { RazorLanguageServerOptions } from './razorLanguageServerOptions';
 import { resolveRazorLanguageServerOptions } from './razorLanguageServerOptionsResolver';
 import { RazorFormatNewFileHandler } from './formatNewFile/razorFormatNewFileHandler';
 import { InlayHintHandler } from './inlayHint/inlayHintHandler';
 import { InlayHintResolveHandler } from './inlayHint/inlayHintResolveHandler';
+import { getComponentPaths } from '../../lsptoolshost/extensions/builtInComponents';
+import { BlazorDebugConfigurationProvider } from './blazorDebug/blazorDebugConfigurationProvider';
 
 // We specifically need to take a reference to a particular instance of the vscode namespace,
 // otherwise providers attempt to operate on the null extension.
@@ -73,14 +69,12 @@ export async function activate(
         create: <T>() => new vscode.EventEmitter<T>(),
     };
 
-    const languageServerLogLevel = resolveRazorLanguageServerLogLevel(vscodeType);
-    const logger = new RazorLogger(eventEmitterFactory, languageServerLogLevel);
+    const logger = new RazorLogger(eventEmitterFactory);
 
     try {
         const razorOptions: RazorLanguageServerOptions = resolveRazorLanguageServerOptions(
             vscodeType,
             languageServerDir,
-            languageServerLogLevel,
             logger
         );
 
@@ -98,13 +92,13 @@ export async function activate(
         if (csharpDevkitExtension) {
             await setupDevKitEnvironment(dotnetInfo.env, csharpDevkitExtension, logger);
 
-            const telemetryExtensionPath = path.join(
-                util.getExtensionPath(),
-                '.razortelemetry',
-                'Microsoft.VisualStudio.DevKit.Razor.dll'
-            );
-            if (await util.fileExists(telemetryExtensionPath)) {
-                telemetryExtensionDllPath = telemetryExtensionPath;
+            if (vscode.env.isTelemetryEnabled) {
+                const razorComponentPaths = getComponentPaths('razorDevKit', undefined);
+                if (razorComponentPaths.length !== 1) {
+                    logger.logError('Failed to find Razor DevKit telemetry extension path.', undefined);
+                } else {
+                    telemetryExtensionDllPath = razorComponentPaths[0];
+                }
             }
         }
 
@@ -127,6 +121,7 @@ export async function activate(
             razorTelemetryReporter,
             platformInfo
         );
+
         const documentSynchronizer = new RazorDocumentSynchronizer(documentManager, logger);
         reportTelemetryForDocuments(documentManager, razorTelemetryReporter);
         const languageConfiguration = new RazorLanguageConfiguration();
@@ -141,6 +136,13 @@ export async function activate(
             languageServerClient,
             logger
         );
+        const completionHandler = new CompletionHandler(
+            documentManager,
+            documentSynchronizer,
+            languageServerClient,
+            csharpFeature.projectionProvider,
+            logger
+        );
 
         // Our dynamic file handler needs to be registered regardless of whether the Razor language server starts
         // since the Roslyn implementation expects the dynamic file commands to always be registered.
@@ -148,12 +150,6 @@ export async function activate(
         dynamicFileInfoProvider.register();
 
         languageServerClient.onStart(async () => {
-            const provisionalCompletionOrchestrator = new ProvisionalCompletionOrchestrator(
-                documentManager,
-                csharpFeature.projectionProvider,
-                languageServiceClient,
-                logger
-            );
             const semanticTokenHandler = new SemanticTokensRangeHandler(
                 documentManager,
                 documentSynchronizer,
@@ -183,14 +179,6 @@ export async function activate(
                 documentManager,
                 documentSynchronizer,
                 languageServerClient,
-                logger
-            );
-
-            const completionItemProvider = new RazorCompletionItemProvider(
-                documentSynchronizer,
-                documentManager,
-                languageServiceClient,
-                provisionalCompletionOrchestrator,
                 logger
             );
             const signatureHelpProvider = new RazorSignatureHelpProvider(
@@ -265,14 +253,6 @@ export async function activate(
 
             localRegistrations.push(
                 languageConfiguration.register(),
-                provisionalCompletionOrchestrator.register(),
-                vscodeType.languages.registerCompletionItemProvider(
-                    RazorLanguage.id,
-                    completionItemProvider,
-                    '.',
-                    '<',
-                    '@'
-                ),
                 vscodeType.languages.registerSignatureHelpProvider(RazorLanguage.id, signatureHelpProvider, '(', ','),
                 vscodeType.languages.registerDefinitionProvider(RazorLanguage.id, definitionProvider),
                 vscodeType.languages.registerImplementationProvider(RazorLanguage.id, implementationProvider),
@@ -286,7 +266,6 @@ export async function activate(
                 htmlFeature.register(),
                 documentSynchronizer.register(),
                 reportIssueCommand.register(),
-                listenToConfigurationChanges(languageServerClient),
                 razorCodeActionRunner.register()
             );
 
@@ -306,6 +285,7 @@ export async function activate(
                 semanticTokenHandler.register(),
                 razorDiagnosticHandler.register(),
                 codeActionsHandler.register(),
+                completionHandler.register(),
                 razorSimplifyMethodHandler.register(),
                 razorFormatNewFileHandler.register(),
             ]);

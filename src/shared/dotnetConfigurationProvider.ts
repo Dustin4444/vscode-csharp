@@ -7,13 +7,13 @@ import * as fs from 'fs-extra';
 import * as vscode from 'vscode';
 import { IWorkspaceDebugInformationProvider, ProjectDebugInformation } from './IWorkspaceDebugInformationProvider';
 import { AssetGenerator, AssetOperations, addTasksJsonIfNecessary, getBuildOperations } from './assets';
-import { getServiceBroker } from '../lsptoolshost/services/brokeredServicesHosting';
-import Descriptors from '../lsptoolshost/services/descriptors';
+import { getServiceBroker } from '../lsptoolshost/serviceBroker/brokeredServicesHosting';
+import Descriptors from '../lsptoolshost/solutionSnapshot/descriptors';
 import {
     DotnetDebugConfigurationServiceErrorKind,
     IDotnetDebugConfigurationService,
     IDotnetDebugConfigurationServiceResult,
-} from '../lsptoolshost/services/IDotnetDebugConfigurationService';
+} from '../lsptoolshost/debugger/IDotnetDebugConfigurationService';
 import { DotnetWorkspaceConfigurationProvider } from './workspaceConfigurationProvider';
 
 // User errors that can be shown to the user.
@@ -110,12 +110,13 @@ export class DotnetConfigurationResolver implements vscode.DebugConfigurationPro
                     throw new UnavaliableLaunchServiceError();
                 }
             } catch (e) {
-                if (!projectPath) {
-                    throw new LaunchServiceError(
-                        vscode.l10n.t("'{0}' was not provided in the debug configuration.", 'projectPath')
-                    );
-                }
                 if (e instanceof UnavaliableLaunchServiceError) {
+                    if (!projectPath) {
+                        throw new LaunchServiceError(
+                            vscode.l10n.t("'{0}' was not provided in the debug configuration.", 'projectPath')
+                        );
+                    }
+
                     return await this.resolveDebugConfigurationWithWorkspaceDebugInformationProvider(
                         folder,
                         projectPath
@@ -170,10 +171,10 @@ export class DotnetConfigurationResolver implements vscode.DebugConfigurationPro
         } else if (debugConfigArray.length === 2) {
             // This creates a onDidStartDebugSession event listener that will dispose of itself when it detects
             // the debugConfiguration that is return from this method has started.
-            const startDebugEvent = vscode.debug.onDidStartDebugSession((debugSession: vscode.DebugSession) => {
+            const startDebugEvent = vscode.debug.onDidStartDebugSession(async (debugSession: vscode.DebugSession) => {
                 if (debugSession.name === debugConfigArray[0].name) {
                     startDebugEvent.dispose();
-                    vscode.debug.startDebugging(debugSession.workspaceFolder, debugConfigArray[1], debugSession);
+                    await vscode.debug.startDebugging(debugSession.workspaceFolder, debugConfigArray[1], debugSession);
                 }
             });
 

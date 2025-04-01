@@ -8,7 +8,6 @@ import { DocumentSelector } from 'vscode-languageserver-protocol';
 import * as path from 'path';
 
 export interface CommonOptions {
-    readonly dotnetPath: string;
     readonly waitForDebugger: boolean;
     readonly serverPath: string;
     readonly useOmnisharpServer: boolean;
@@ -18,6 +17,7 @@ export interface CommonOptions {
     readonly defaultSolution: string;
     readonly unitTestDebuggingOptions: object;
     readonly runSettingsPath: string;
+    readonly organizeImportsOnFormat: boolean;
 }
 
 export interface OmnisharpServerOptions {
@@ -35,7 +35,6 @@ export interface OmnisharpServerOptions {
     readonly enableImportCompletion: boolean;
     readonly enableAsyncCompletion: boolean;
     readonly analyzeOpenDocumentsOnly: boolean;
-    readonly organizeImportsOnFormat: boolean;
     readonly disableMSBuildDiagnosticWarning: boolean;
     readonly showOmnisharpLogOnError: boolean;
     readonly minFindSymbolsFilterLength: number;
@@ -66,10 +65,10 @@ export interface OmnisharpServerOptions {
     readonly maxProjectFileCountForDiagnosticAnalysis: number;
     readonly suppressDotnetRestoreNotification: boolean;
     readonly enableLspDriver?: boolean | null;
+    readonly dotnetPath: string;
 }
 
 export interface LanguageServerOptions {
-    readonly logLevel: string;
     readonly documentSelector: DocumentSelector;
     readonly extensionsPaths: string[] | null;
     readonly preferCSharpExtension: boolean;
@@ -77,17 +76,21 @@ export interface LanguageServerOptions {
     readonly crashDumpPath: string | undefined;
     readonly analyzerDiagnosticScope: string;
     readonly compilerDiagnosticScope: string;
+    readonly componentPaths: { [key: string]: string } | null;
+    readonly enableXamlTools: boolean;
+    readonly suppressLspErrorToasts: boolean;
+    readonly suppressMiscellaneousFilesToasts: boolean;
+    readonly useServerGC: boolean;
+    readonly reportInformationAsHint: boolean;
 }
 
 export interface RazorOptions {
     readonly razorDevMode: boolean;
     readonly razorPluginPath: string;
+    readonly razorServerPath: string;
 }
 
 class CommonOptionsImpl implements CommonOptions {
-    public get dotnetPath() {
-        return readOption<string>('dotnet.dotnetPath', '', 'omnisharp.dotnetPath');
-    }
     public get waitForDebugger() {
         return readOption<boolean>('dotnet.server.waitForDebugger', false, 'omnisharp.waitForDebugger');
     }
@@ -154,6 +157,9 @@ class CommonOptionsImpl implements CommonOptions {
     }
     public get runSettingsPath() {
         return readOption<string>('dotnet.unitTests.runSettingsPath', '', 'omnisharp.testRunSettings');
+    }
+    public get organizeImportsOnFormat() {
+        return readOption<boolean>('dotnet.formatting.organizeImportsOnFormat', false);
     }
 }
 
@@ -224,9 +230,6 @@ class OmnisharpOptionsImpl implements OmnisharpServerOptions {
         );
         const analyzeOpenDocumentsOnlyNewOption = diagnosticAnalysisScope == 'openFiles';
         return analyzeOpenDocumentsOnlyLegacyOption || analyzeOpenDocumentsOnlyNewOption;
-    }
-    public get organizeImportsOnFormat() {
-        return readOption<boolean>('omnisharp.organizeImportsOnFormat', false);
     }
     public get disableMSBuildDiagnosticWarning() {
         return readOption<boolean>('omnisharp.disableMSBuildDiagnosticWarning', false);
@@ -370,12 +373,12 @@ class OmnisharpOptionsImpl implements OmnisharpServerOptions {
     public get enableLspDriver() {
         return readOption<boolean>('omnisharp.enableLspDriver', false);
     }
+    public get dotnetPath() {
+        return readOption<string>('omnisharp.dotnetPath', '');
+    }
 }
 
 class LanguageServerOptionsImpl implements LanguageServerOptions {
-    public get logLevel() {
-        return readOption<string>('dotnet.server.trace', 'Information');
-    }
     public get documentSelector() {
         return readOption<DocumentSelector>('dotnet.server.documentSelector', ['csharp']);
     }
@@ -397,6 +400,24 @@ class LanguageServerOptionsImpl implements LanguageServerOptions {
     public get compilerDiagnosticScope() {
         return readOption<string>('dotnet.backgroundAnalysis.compilerDiagnosticsScope', 'openFiles');
     }
+    public get componentPaths() {
+        return readOption<{ [key: string]: string }>('dotnet.server.componentPaths', {});
+    }
+    public get enableXamlTools() {
+        return readOption<boolean>('dotnet.enableXamlTools', true);
+    }
+    public get suppressLspErrorToasts() {
+        return readOption<boolean>('dotnet.server.suppressLspErrorToasts', false);
+    }
+    public get suppressMiscellaneousFilesToasts() {
+        return readOption<boolean>('dotnet.server.suppressMiscellaneousFilesToasts', false);
+    }
+    public get useServerGC() {
+        return readOption<boolean>('dotnet.server.useServerGC', true);
+    }
+    public get reportInformationAsHint() {
+        return readOption<boolean>('dotnet.diagnostics.reportInformationAsHint', true);
+    }
 }
 
 class RazorOptionsImpl implements RazorOptions {
@@ -405,6 +426,9 @@ class RazorOptionsImpl implements RazorOptions {
     }
     public get razorPluginPath() {
         return readOption<string>('razor.plugin.path', '');
+    }
+    public get razorServerPath() {
+        return readOption<string>('razor.languageServer.directory', '');
     }
 }
 
@@ -451,19 +475,18 @@ function readOption<T>(option: string, defaultValue: T, ...backCompatOptionNames
 }
 
 export const CommonOptionsThatTriggerReload: ReadonlyArray<keyof CommonOptions> = [
-    'dotnetPath',
     'waitForDebugger',
     'serverPath',
     'useOmnisharpServer',
 ];
 
 export const OmnisharpOptionsThatTriggerReload: ReadonlyArray<keyof OmnisharpServerOptions> = [
+    'dotnetPath',
     'enableMsBuildLoadProjectsOnDemand',
     'loggingLevel',
     'enableEditorConfigSupport',
     'enableDecompilationSupport',
     'enableImportCompletion',
-    'organizeImportsOnFormat',
     'enableAsyncCompletion',
     'useModernNet',
     'enableLspDriver',
@@ -487,7 +510,10 @@ export const OmnisharpOptionsThatTriggerReload: ReadonlyArray<keyof OmnisharpSer
 ];
 
 export const LanguageServerOptionsThatTriggerReload: ReadonlyArray<keyof LanguageServerOptions> = [
-    'logLevel',
     'documentSelector',
     'preferCSharpExtension',
+    'componentPaths',
+    'enableXamlTools',
+    'useServerGC',
+    'reportInformationAsHint',
 ];

@@ -10,13 +10,11 @@ import * as vscodeAdapter from './vscodeAdapter';
 import * as vscode from 'vscode';
 import { RazorLanguageServerOptions } from './razorLanguageServerOptions';
 import { RazorLogger } from './razorLogger';
-import { LogLevel } from './logLevel';
 import { getCSharpDevKit } from '../../utils/getCSharpDevKit';
 
 export function resolveRazorLanguageServerOptions(
     vscodeApi: vscodeAdapter.api,
     languageServerDir: string,
-    logLevel: LogLevel,
     logger: RazorLogger
 ) {
     const languageServerExecutablePath = findLanguageServerExecutable(languageServerDir);
@@ -25,21 +23,56 @@ export function resolveRazorLanguageServerOptions(
     const usingOmniSharp =
         !getCSharpDevKit() && vscodeApi.workspace.getConfiguration().get<boolean>('dotnet.server.useOmnisharp');
 
+    const hotReload = vscodeApi.workspace.getConfiguration('csharp.experimental.debug').get<boolean>('hotReload');
+
+    let forceRuntimeCodeGeneration = serverConfig.get<boolean | null>('forceRuntimeCodeGeneration');
+
+    if (forceRuntimeCodeGeneration === null && hotReload) {
+        logger.logMessage(
+            'Hot Reload is enabled so treating "razor.languageServer.forceRuntimeCodeGeneration" as true. To override this set "razor.languageServer.forceRuntimeCodeGeneration" to true or false.'
+        );
+
+        forceRuntimeCodeGeneration = hotReload;
+    }
+
+    const suppressErrorToasts = serverConfig.get<boolean>('suppressLspErrorToasts');
+    const useNewFormattingEngine = serverConfig.get<boolean>('useNewFormattingEngine');
+
     return {
         serverPath: languageServerExecutablePath,
         debug: debugLanguageServer,
-        logLevel: logLevel,
         outputChannel: logger.outputChannel,
         usingOmniSharp,
+        forceRuntimeCodeGeneration,
+        suppressErrorToasts,
+        useNewFormattingEngine,
     } as RazorLanguageServerOptions;
 }
 
 function findLanguageServerExecutable(withinDir: string) {
-    // Prefer using executable over fallback to dll.
-    const fileName = isWindows() ? 'rzls.exe' : 'rzls';
-    let fullPath = path.join(withinDir, fileName);
+    // On Windows we use the executable, which is "rzls.exe".
+    // On macOS we use the dll, which is "rzls.dll".
+    // On everything else we use the executable, which is "rzls".
+
+    const fileName = 'rzls';
+    let extension = '';
+
+    if (isWindows()) {
+        extension = '.exe';
+    }
+
+    if (isMacOS()) {
+        // Use the DLL on MacOS to work around signing issue tracked by https://devdiv.visualstudio.com/DevDiv/_workitems/edit/1767519/
+        extension = '.dll';
+    }
+
+    let pathWithExtension = `${fileName}${extension}`;
+    let fullPath = path.join(withinDir, pathWithExtension);
+
     if (!fs.existsSync(fullPath)) {
-        fullPath = path.join(withinDir, 'rzls.dll');
+        // We might be running a platform neutral vsix which has no executable, instead we run the dll directly.
+        pathWithExtension = `${fileName}.dll`;
+        fullPath = path.join(withinDir, pathWithExtension);
     }
 
     if (!fs.existsSync(fullPath)) {
@@ -53,4 +86,8 @@ function findLanguageServerExecutable(withinDir: string) {
 
 function isWindows() {
     return !!os.platform().match(/^win/);
+}
+
+function isMacOS() {
+    return os.platform() === 'darwin';
 }

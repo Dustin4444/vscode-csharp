@@ -6,17 +6,20 @@
 import * as cp from 'child_process';
 import { EventEmitter } from 'events';
 import * as vscode from 'vscode';
-import { RequestHandler, RequestType } from 'vscode-jsonrpc';
-import { GenericNotificationHandler, InitializeResult, LanguageClientOptions, State } from 'vscode-languageclient';
-import { LanguageClient, ServerOptions } from 'vscode-languageclient/node';
+import { GenericNotificationHandler, RequestHandler, RequestType } from 'vscode-jsonrpc';
+import { InitializeResult } from 'vscode-languageserver-protocol';
+import { LanguageClientOptions, State } from 'vscode-languageclient';
+import { ServerOptions } from 'vscode-languageclient/node';
 import { RazorLanguage } from './razorLanguage';
 import { RazorLanguageServerOptions } from './razorLanguageServerOptions';
 import { resolveRazorLanguageServerOptions } from './razorLanguageServerOptionsResolver';
-import { resolveRazorLanguageServerLogLevel } from './razorLanguageServerTraceResolver';
 import { RazorLogger } from './razorLogger';
 import { TelemetryReporter as RazorTelemetryReporter } from './telemetryReporter';
 import TelemetryReporter from '@vscode/extension-telemetry';
 import { randomUUID } from 'crypto';
+import { showErrorMessage } from '../../shared/observers/utils/showMessage';
+import { RazorLanguageClient } from './razorLanguageClient';
+import { provideDiagnostics, provideWorkspaceDiagnostics } from '../../lsptoolshost/diagnostics/diagnosticMiddleware';
 
 const events = {
     ServerStop: 'ServerStop',
@@ -25,7 +28,7 @@ const events = {
 export class RazorLanguageServerClient implements vscode.Disposable {
     private clientOptions!: LanguageClientOptions;
     private serverOptions!: ServerOptions;
-    private client!: LanguageClient;
+    private client!: RazorLanguageClient;
     private onStartListeners: Array<() => Promise<any>> = [];
     private onStartedListeners: Array<() => Promise<any>> = [];
     private eventBus: EventEmitter;
@@ -52,12 +55,6 @@ export class RazorLanguageServerClient implements vscode.Disposable {
 
     public get initializeResult(): InitializeResult | undefined {
         return this.client.initializeResult;
-    }
-
-    public updateTraceLevel() {
-        const languageServerLogLevel = resolveRazorLanguageServerLogLevel(this.vscodeType);
-        this.setupLanguageServer();
-        this.logger.setTraceLevel(languageServerLogLevel);
     }
 
     public onStarted(listener: () => Promise<any>) {
@@ -113,6 +110,10 @@ export class RazorLanguageServerClient implements vscode.Disposable {
             await this.client.start();
             this.logger.logMessage('Server started, waiting for client to be ready...');
             this.isStarted = true;
+
+            // Server is ready, hook up so logging changes can be reported
+            this.logger.languageServerClient = this;
+
             for (const listener of this.onStartListeners) {
                 await listener();
             }
@@ -121,6 +122,7 @@ export class RazorLanguageServerClient implements vscode.Disposable {
             resolve();
 
             this.logger.logMessage('Server ready!');
+
             for (const listener of this.onStartedListeners) {
                 await listener();
             }
@@ -129,7 +131,8 @@ export class RazorLanguageServerClient implements vscode.Disposable {
             // the language client will handle that.
             didChangeStateDisposable.dispose();
         } catch (error) {
-            vscode.window.showErrorMessage(
+            showErrorMessage(
+                vscode,
                 vscode.l10n.t(
                     "Razor Language Server failed to start unexpectedly, please check the 'Razor Log' and report an issue."
                 )
@@ -148,6 +151,14 @@ export class RazorLanguageServerClient implements vscode.Disposable {
         }
 
         return this.client.sendRequest<TResponseType>(method, param);
+    }
+
+    public async sendNotification(method: string, param: any) {
+        if (!this.isStarted) {
+            throw new Error(vscode.l10n.t('Tried to send requests while server is not started.'));
+        }
+
+        return this.client.sendNotification(method, param);
     }
 
     public async onRequestWithParams<P, R, E>(method: RequestType<P, R, E>, handler: RequestHandler<P, R, E>) {
@@ -198,7 +209,8 @@ export class RazorLanguageServerClient implements vscode.Disposable {
 
             resolve();
         } catch (error) {
-            vscode.window.showErrorMessage(
+            showErrorMessage(
+                vscode,
                 vscode.l10n.t(
                     "Razor Language Server failed to stop correctly, please check the 'Razor Log' and report an issue."
                 )
@@ -210,17 +222,26 @@ export class RazorLanguageServerClient implements vscode.Disposable {
         return this.stopHandle;
     }
 
+    public async connectNamedPipe(pipeName: string): Promise<void> {
+        await this.start();
+
+        // Params must match https://github.com/dotnet/razor/blob/92005deac54f3e9d1a4d1d8f04389379cccfa354/src/Razor/src/Microsoft.CodeAnalysis.Razor.Workspaces/Protocol/RazorNamedPipeConnectParams.cs#L9
+        await this.sendNotification('razor/namedPipeConnect', { pipeName: pipeName });
+    }
+
     private setupLanguageServer() {
-        const languageServerTrace = resolveRazorLanguageServerLogLevel(this.vscodeType);
         const options: RazorLanguageServerOptions = resolveRazorLanguageServerOptions(
             this.vscodeType,
             this.languageServerDir,
-            languageServerTrace,
             this.logger
         );
         this.clientOptions = {
             outputChannel: options.outputChannel,
             documentSelector: [{ language: RazorLanguage.id, pattern: RazorLanguage.globbingPattern }],
+            middleware: {
+                provideDiagnostics,
+                provideWorkspaceDiagnostics,
+            },
         };
 
         const args: string[] = [];
@@ -228,8 +249,8 @@ export class RazorLanguageServerClient implements vscode.Disposable {
         this.logger.logMessage(`Razor language server path: ${options.serverPath}`);
 
         args.push('--logLevel');
-        args.push(options.logLevel.toString());
-        this.razorTelemetryReporter.reportTraceLevel(options.logLevel);
+        args.push(this.logger.logLevelForRZLS.toString());
+        this.razorTelemetryReporter.reportTraceLevel(this.logger.logLevel);
 
         if (options.debug) {
             this.razorTelemetryReporter.reportDebugLanguageServer();
@@ -240,12 +261,20 @@ export class RazorLanguageServerClient implements vscode.Disposable {
 
         // TODO: When all of this code is on GitHub, should we just pass `--omnisharp` as a flag to rzls, and let it decide?
         if (!options.usingOmniSharp) {
-            args.push('--projectConfigurationFileName');
-            args.push('project.razor.vscode.bin');
             args.push('--DelegateToCSharpOnDiagnosticPublish');
             args.push('true');
             args.push('--UpdateBuffersForClosedDocuments');
             args.push('true');
+            args.push('--SingleServerCompletionSupport');
+            args.push('true');
+
+            args.push('--ForceRuntimeCodeGeneration');
+            args.push(options.forceRuntimeCodeGeneration ? 'true' : 'false');
+
+            if (options.useNewFormattingEngine) {
+                args.push('--UseNewFormattingEngine');
+                args.push('true');
+            }
 
             if (this.telemetryExtensionDllPath.length > 0) {
                 args.push('--telemetryLevel', this.vscodeTelemetryReporter.telemetryLevel);
@@ -276,11 +305,12 @@ export class RazorLanguageServerClient implements vscode.Disposable {
 
         this.serverOptions = childProcess;
 
-        this.client = new LanguageClient(
+        this.client = new RazorLanguageClient(
             'razorLanguageServer',
             'Razor Language Server',
             this.serverOptions,
-            this.clientOptions
+            this.clientOptions,
+            options
         );
     }
 }

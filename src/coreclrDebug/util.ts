@@ -14,6 +14,11 @@ import { DotnetInfo } from '../shared/utils/dotnetInfo';
 
 const MINIMUM_SUPPORTED_DOTNET_CLI = '1.0.0';
 
+// .NET 8 requires macOS 12+, however the build machines are on macOS 13, which is Darwin 22.0+
+// Darwin version chart: https://en.wikipedia.org/wiki/Darwin_(operating_system)
+const MINIMUM_SUPPORT_MACOS_VERSION = '22.0.0';
+export const MINIMUM_SUPPORT_MACOS_DISPLAY_NAME = 'macOS 13 (Ventura)';
+
 export class CoreClrDebugUtil {
     private _extensionDir = '';
     private _debugAdapterDir = '';
@@ -83,9 +88,7 @@ export class CoreClrDebugUtil {
     }
 
     public static isMacOSSupported(): boolean {
-        // .NET Core 2.0 requires macOS 10.12 (Sierra), which is Darwin 16.0+
-        // Darwin version chart: https://en.wikipedia.org/wiki/Darwin_(operating_system)
-        return semver.gte(os.release(), '16.0.0');
+        return semver.gte(os.release(), MINIMUM_SUPPORT_MACOS_VERSION);
     }
 
     public static existsSync(path: string): boolean {
