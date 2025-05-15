@@ -101,7 +101,7 @@
     "https-proxy-agent": "7.0.2",
     "jsonc-parser": "3.0.0",
     "microsoft.aspnetcore.razor.vscode": "https://download.visualstudio.microsoft.com/download/pr/aee63398-023f-48db-bba2-30162c68f0c4/0af42abab690d5de903a4a814d6aedc1/microsoft.aspnetcore.razor.vscode-7.0.0-preview.23363.1.tgz",
-    "nerdbank-gitversioning": "^3.6.79-alpha",
+    "nerdbank-gitversioning": "^3.7.115",
     "node-machine-id": "1.1.12",
     "ps-list": "7.2.0",
     "request-light": "0.7.0",
