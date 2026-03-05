@@ -138,7 +138,7 @@
     "@typescript-eslint/eslint-plugin": "^8.19.0",
     "@typescript-eslint/parser": "^8.19.0",
     "@vscode/l10n-dev": "^0.0.35",
-    "@vscode/test-electron": "2.3.8",
+    "@vscode/test-electron": "2.5.2",
     "@vscode/vsce": "3.0.0",
     "archiver": "5.3.0",
     "del": "3.0.0",
